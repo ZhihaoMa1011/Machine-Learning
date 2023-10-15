@@ -1,372 +1,255 @@
-# HW 2 Problem 2. boosting & bagging algorithm
 import math
-import statistics
+import random
+import sys
+sys.path.append('../DecisionTree')
 import numpy as np
-#-----------------train data process------------------------------------
+import ID3
 
-train_path = r"E:\U of U\OneDrive - University of Utah\Course\Machine Learning\bank\bank"
-with open(train_path, mode='r') as f:
-    myList_train=[];
-    for line in f:
-        terms=line.strip().split(',') # 7*N matrix
-        myList_train.append(terms)
+T = 1000
+m = 4999
+trees = []
+vote_arr = []
+attr_subset_nums = [2, 4, 6]
+attr_subset_num = 0
 
-num_set={0,5,9,11,12,13,14} # indices of numeric attr   
-def str_2_flo(mylist):
-    temp_list = mylist
-    for k in range(len(temp_list)):
-        for i in {0,5,9,11,12,13,14}:
-            temp_list[k][i] = float(mylist[k][i])
-    return temp_list
 
-mylist_train = str_2_flo(myList_train)
+# Adaboost
+def _run_ada_boost():
+    """Runs T iterations of the ID3 algorithm on Decision Stumps"""
+    global predictions
+    test_predictions = np.zeros((T, m))
+    y_train = np.array(ID3.train_data[-1])
+    y_test = np.array(ID3.test_data[-1])
+    train_err_str = ""
+    test_err_str = ""
 
-obj={0:0,5:5,9:9,11:11,12:12,13:13,14:14}
-for i in obj:
-    obj[i] = statistics.median([row[i] for row in mylist_train])
+    for t in range(T):
+        arr = _train_iter_ada_boost(t, y_train)
+        train_err_str += str(_calculate_prediction_error(y_train, arr[0])) + ","
+
+        test_hyp = _test_iter_ada_boost(arr[1], test_predictions)
+        test_err_str += str(_calculate_prediction_error(y_test, test_hyp)) + ","
+
+    print("TRAIN: ")
+    print(train_err_str)
+    print("TEST: ")
+    print(test_err_str)
+
+    train_err_str = ""
+    test_err_str = ""
+    for t in range(T):
+        train_err_str += str(ID3.calculate_prediction_error_for_tree(ID3.train_data, trees[t].root)) + ","
+        test_err_str += str(ID3.calculate_prediction_error_for_tree(ID3.test_data, trees[t].root)) + ","
+
+    print("DEC STUMP TRAIN: ")
+    print(train_err_str)
+    print("DEC STUMP TEST: ")
+    print(test_err_str)
     
-for row in mylist_train:
-    for i in obj:
-        if row[i] >= obj[i]:
-            row[i] = 'yes'
-        else:
-            row[i] = 'no'                     
-#--------------------test data process--------------------------------
-with open('test.csv',mode='r') as f:
-    myList_test=[];
-    for line in f:
-        terms=line.strip().split(',') # 7*N matrix
-        myList_test.append(terms)
 
-mylist_test = str_2_flo(myList_test)
-for i in obj:
-    obj[i] = statistics.median([row[i] for row in mylist_test])
-#binary quantization of numerical attributes
-for row in mylist_test:
-    for i in obj:
-        if row[i] >= obj[i]:
-            row[i] = 'yes'
-        else:
-            row[i] = 'no'  
-#------------------------------------------------------------------------------
-Attr_dict ={'age':['yes','no'],
-             'job':['admin.','unknown','unemployed','management',
-                    'housemaid','entrepreneur','student','blue-collar',
-                    'self-employed','retired','technician','services'],
-                    'martial':['married','divorced','single'],
-                    'education':['unknown','secondary','primary','tertiary'],
-                     'default':['yes','no'],
-                     'balance':['yes','no'],
-                     'housing':['yes','no'],
-                     'loan':['yes','no'],
-                     'contact':['unknown','telephone','cellular'],
-                     'day':['yes','no'],
-                     'month':['jan', 'feb', 'mar', 'apr','may','jun','jul','aug','sep','oct', 'nov', 'dec'],
-                     'duration': ['yes','no'],
-                     'campaign':['yes','no'],
-                     'pdays':['yes','no'],
-                     'previous':['yes','no'],
-                     'poutcome':[ 'unknown','other','failure','success']}
 
-Attr_set = set(key for key in Attr_dict)   # the set of all possible attr.s
+def _train_iter_ada_boost(t, y):
+    """
+    Runs one iteration of adaboost on the train data.
+    Trains a decision stump, then calculates the predictions, error and vote, then finds the final hypothesis.
+    """
+    global vote_arr
+    s = ID3.train_data
+    tree = ID3.train(s, t)
+    trees.append(tree)
 
-def pos(attr):
-    pos=0
-    if attr=='age':
-        pos=0
-    if attr=='job':
-        pos=1
-    if attr=='martial':
-        pos=2
-    if attr=='education':
-        pos=3
-    if attr=='default':
-        pos=4
-    if attr=='balance':
-        pos=5
-    if attr=='housing':
-        pos=6
-    if attr=='loan':
-        pos=7
-    if attr=='contact':
-        pos=8
-    if attr=='day':
-        pos=9
-    if attr=='month':
-        pos=10
-    if attr=='duration':
-        pos=11
-    if attr=='campaign':
-        pos=12
-    if attr=='pdays':
-        pos=13
-    if attr=='previous':
-        pos=14
-    if attr=='poutcome':
-        pos=15
-    if attr=='y':
-        pos=16
-    return pos        
- 
-#----------------------------------------------------------------------------  
-def create_list(attr):
-    obj={}
-    for attr_val in Attr_dict[attr]:
-        obj[attr_val]=[]
-    return obj   # dict type with list value type
+    predictions[t] = _calculate_predictions(s, tree.root, predictions[t])
+    error = _calculate_error(y, t)
 
-def create_list_0(attr):
-    obj={}
-    for attr_val in attr:
-        obj[attr_val]=0
-    return obj    # dict type with float value type   dict=(key,value) 
-#----------------------------------------------------------------------------
-# weighted expected entropy
-# groups:  dict type
-# classes: ther set of labels contained in 'groups'
-def exp_entropy(groups, classes):
-    #N_ins= float(sum([len(groups[attr_val]) for attr_val in groups])) 
-    Q = 0.0   #total weights
-    tp =0.0
-    for attr_val in groups:
-        tp = sum([row[-1] for row in groups[attr_val]])
-        Q = Q + tp       
-    exp_ent = 0.0
-    for attr_val in groups:
-        size = float(len(groups[attr_val]))
-        if size == 0:
-            continue
-        score = 0.0
-        for class_val in classes:
-#            p = [row[-3] for row in groups[attr_val]].count(class_val) / size   ###
-            q = sum([row[-1] for row in groups[attr_val]])
-            p = sum([row[-1] for row in groups[attr_val] if row[-2] == class_val])/q  #sum up the weights
-            if p==0:
-                temp=0
-            else:
-                temp=p*math.log2(1/p)
-            score +=temp 
-#        exp_ent += score* (size / N_ins)
-        exp_ent += score* sum([row[-1] for row in groups[attr_val]])/Q #total weights of a subset
-    return exp_ent          
-#--------------------------------------------------------------------------
-#dataset: list type
-# return an dict with subsets of samples corres. to vlaues of attr.
-def data_split(attr, dataset):
-    branch_obj=create_list(attr)  # this may result in empty dict elements 
-    for row in dataset:
-        for attr_val in Attr_dict[attr]:
-           if row[pos(attr)] == attr_val:
-               branch_obj[attr_val].append(row)
-    return branch_obj
-#----------------------------------------------------------------------------
-#used_ attr: the set of used attr., which can not be reused
-def find_best_split(dataset, used_attr):
-    # if data set contains only one label, return a leaf node
-    # make sure dataset is divisible(contain more than one label) before call this function
-    if dataset==[]:
-        return 
-    label_values = list(set(row[-2] for row in dataset)) ###    
-    metric_obj = create_list_0(exclusion(Attr_set, used_attr))   # record gain for each attr.
-    for attr in exclusion(Attr_set, used_attr):
-        groups = data_split(attr, dataset)
-        metric_obj[attr] = exp_entropy(groups, label_values)   # change metric here ##### add weights here
-    best_attr = min(metric_obj, key=metric_obj.get)
-    used_attr.add(best_attr)     #update the used attr set
-    #bug here: ID3 requires that along each path (a specific root to leaf path), not attr. should be used twice
-    best_groups = data_split(best_attr, dataset)  
-    return {'best_attr':best_attr, 'best_groups':best_groups, 'used_attr': used_attr}
-# B set of used attrs
-# A set of all poissible attrs
-def exclusion(A,B):
-    for b in B:
-        if b in A:
-            A.remove(b)
-    return A
-#----------------------------------------------------------------------------    
-# returns the majority label within 'group' (list type)
-#'gorup' type list  --- set of smaples 
-def leaf_node_label(data_group):
-    majority_labels = [row[-2] for row in data_group]
-    return max(set(majority_labels), key=majority_labels.count)
+    vote_arr.append(_calculate_vote(error))
+    votes = np.array(vote_arr)
+    if t != T-1:  _calculate_weights(votes, y, t)
 
-# =============================================================================
-# #input: dict
-# def if_node_divisible(branch_obj):
-#     non_empty_indices=[key for key in branch_obj if not (not branch_obj[key])]
-#     if len(non_empty_indices)==1:
-#         return False
-#     # does this really mean that node is not divisible? we can still keep building thr tree after 
-#     # the non-empty branch 
-#     else:
-#         return True
-# =============================================================================
-#input: list
-def if_divisible(dataset):
-    if len(set(row[-2] for row in dataset)) > 1: # assume dataset is appended with wieght
-        return True
-    else:
-        return False 
+    hyp = _calculate_ada_final_hyp(votes, predictions)
+    return [hyp, votes]
 
-#input : node - dict 
-def child_node(node, max_depth, curr_depth):
-    if not if_divisible(sum(node['best_groups'].values(),[])): 
-        # node is not divisible, i.e., contains only one label
-        for key in node['best_groups']:
-            node[key] = leaf_node_label(sum(node['best_groups'].values(),[]))
-#            if  node['best_groups'][key]!= []:  
-#                 node[key] = leaf_node_label(node['best_groups'][key])
-#                 # create a leaf node
-#            else:
-#                node[key] = leaf_node_label(sum(node['best_groups'].values(),[])) 
-#                #if S_v empty, return a leaf node with majority label in S
-        return
-    if curr_depth >= max_depth:
-        for key in node['best_groups']:
-            if  node['best_groups'][key]!= []: #and ( not isinstance(node['best_groups'][key],str)):
-                # extract nonempty branches
-                node[key] = leaf_node_label(node['best_groups'][key])   
-            else:
-                node[key] = leaf_node_label(sum(node['best_groups'].values(),[]))
-        return  
-    if node['used_attr'] == Attr_set: # run out of attributes
-        for key in node['best_groups']:
-            node[key] = leaf_node_label(sum(node['best_groups'].values(),[]))
-    for key in node['best_groups']:
-        if node['best_groups'][key]!= []: #and node['best_groups'][key] is divisible
-            node[key] = find_best_split(node['best_groups'][key], node['used_attr']) 
-            child_node(node[key], max_depth, curr_depth + 1)
-        else:
-            node[key] = leaf_node_label(sum(node['best_groups'].values(),[]))         
-#----------------------------------------------------------------------------
-def tree_build(train_data, max_depth):
-	root = find_best_split(train_data, Attr_set)               #########add weights here
-	child_node(root, max_depth, 1)
-	return root
-#----------------------------------------------------------------------------
-#test if an instance belongs to a node recursively
-def label_predict(node, inst):
-    if isinstance(node[inst[pos(node['best_attr'])]],dict):
-        return label_predict(node[inst[pos(node['best_attr'])]],inst)
-    else:
-        return node[inst[pos(node['best_attr'])]]   #leaf node
-#-----------------------------weighted error------------------     
-def wt_error(true_label, predicted, weights):
-    count = 0  # correct predication count
-    for i in range(len(true_label)):
-        if true_label[i] != predicted[i]:
-            count += weights[i]
-    return count
-#    return count / float(len(true_label)) * 100.0
-#sign function
-def sign_func(val):
-    if val > 0:
-        return 1.0
-    else:
-        return -1.0 
-#------return the true label and predicted result using stump 'tree'-----
-def label_return(dataset,tree):
-    true_label = []
-    pred_seq = []   # predicted sequence
-    for row in dataset:
-        true_label.append(row[-2])    
-        pre = label_predict(tree, row)
-        pred_seq.append(pre)
-    return [true_label, pred_seq]
-    
-# create dict with n keys and list element
-def list_obj(n):
-    obj={}
-    for i in range(n):
-        obj[i] = []
-    return obj
-#-------------------------convert label to binaries---------------------
-def bin_quan(llist):
-    bin_list =[]
-    for i in range(len(llist)):
-        if llist[i] == 'yes':
-            bin_list.append(1.0)
-        else:
-            bin_list.append(-1.0)
-    return bin_list
-#bin_true: true lable
-#bin_pred: predicted result
-def wt_update(curr_wt, vote, bin_true, bin_pred):  # updating weights
-    next_wt=[]  # updated wieght
-    for i in range(len(bin_true)):
-        next_wt.append(curr_wt[i]*math.e**(- vote*bin_true[i]*bin_pred[i]))
-    next_wt = [x/sum(next_wt) for x in next_wt]
-    return next_wt
 
-#----------------------------------------------------------------------
-def wt_append(mylist, weights):
-    for i in range(len(mylist)):
-        mylist[i].append(weights[i]) 
-    return mylist 
-# replace the last weight column with 'weight'
-def wt_update_2_data(data, weight):
+def _test_iter_ada_boost(votes, _predictions):
+    """Calculates the final hypothesis of the test data when run on the trained trees."""
+    s = ID3.test_data
+    for t in range(len(trees)):
+        _predictions[t] = _calculate_predictions(s, trees[t].root, _predictions[t])
+    return _calculate_ada_final_hyp(votes, _predictions)
+
+
+def _calculate_error(y, t):
+    """Calculates the error for predictions[t] with example_weights[t]"""
+    return 0.5 - (0.5 * (np.sum(ID3.example_weights[t] * y * predictions[t])))
+
+
+def _calculate_vote(error):
+    """Calculates the vote for the given error"""
+    # no base takes natural log
+    return 0.5 * math.log((1.0 - error) / error)
+
+
+def _calculate_weights(votes, y, t):
+    """Calculates the weights for the adaboost algorithm"""
+    ID3.example_weights[t+1] = ID3.example_weights[t] * np.exp(-votes[t] * y * predictions[t])
+    z = np.sum(ID3.example_weights[t+1])
+    ID3.example_weights[t+1] /= z
+
+
+def _calculate_ada_final_hyp(votes, _predictions):
+    """Sums up the predictions times the given votes"""
+    temp = np.tile(np.zeros(m), (len(votes), 1))
+    for index in range(len(votes)):
+        temp[index] = np.array(votes[index] * _predictions[index])
+    return np.sign(temp.sum(axis=0))
+
+
+# Bagged Trees
+def _run_bagged():
+    """Runs the bagged decision tree algorithm for T different samples"""
+    global predictions
+    predictions = np.zeros(4999)
+    test_predictions = np.zeros(4999)
+    train_err_str = ""
+    test_err_str = ""
+
+    for t in range(T):
+        [train_err, predictions] = _run_bagged_iter(t, True, ID3.train_data, predictions)
+        train_err_str += str(train_err) + ","
+
+        [test_err, test_predictions] = _run_bagged_iter(t, False, ID3.test_data, test_predictions)
+        test_err_str += str(test_err) + ","
+
+    print("TRAIN: ")
+    print(train_err_str)
+    print("TEST: ")
+    print(test_err_str)
+
+
+def _run_bagged_iter(_t, is_train, data, _predictions):
+    """Runs one iteration of the bagged decision tree algorithm"""
+    s = _draw_sample(data)
+    if is_train: trees.append(ID3.train(s, _t, attr_subset_num))
+    _predictions = _calculate_bagged_predictions(data, trees[_t].root, _predictions)
+    hyp = _calculate_bagged_final_hyp(_predictions)
+
+    return [_calculate_prediction_error(np.array(data[-1], dtype=int), hyp), _predictions]
+
+
+def _draw_sample(data):
+    """Draws m samples uniformly with replacement"""
+    s = []
+    indices = []
     for i in range(len(data)):
-        data[i][-1] = weight[i]
-    return data
-#-----------------------------------------------------------
-# indiv_pred: individual stump prediction result
-def fin_dec(indiv_pred, vote, data_len, _T):
-    fin_pred = []
-    for j in range(data_len):
-        score = sum([indiv_pred[i][0][j]*vote[i] for i in range(_T)])
-        fin_pred.append(sign_func(score))
-    return fin_pred
+        s.append([])
+    for i in range(m):
+        n = random.randint(0, len(data[-1]) - 1)
+        indices.append(n)
+        for j in range(len(data)):
+            s[j].append(data[j][n])
+    return s
 
-def _error(_true_lb, _pred_lb): 
+
+def _calculate_bagged_final_hyp( _predictions):
+    """Updates predictions that are 0 to -1 or 1"""
+    is_even = True
+    final_hyp = np.sign(_predictions)
+    for i in range(_predictions.size):
+        p = _predictions[i]
+
+        if p == 0:
+            if is_even: p = 1
+            else: p = -1
+            is_even = not is_even
+
+        final_hyp[i] = p
+    return np.sign(final_hyp)
+
+
+# Bias/variance
+def _bias_variance_decomp():
+    m = 1000
+    _trees = []
+    for i in range(100):
+        trees.append([])
+
+        for t in range(T):
+            s = _draw_sample(ID3.train_data)
+            trees[i].append(ID3.train(s, t))
+            if t == 0: _trees.append(trees[i][t])
+
+    test_predictions = np.zeros((100, m))
+    y = np.array(ID3.test_data[-1], dtype=int)
+    for i in range(len(_trees)):
+        test_predictions[i] = _calculate_predictions(ID3.test_data, _trees[i].root, test_predictions[i])
+    # TODO: BIAS
+    # bias_terms = 0.0
+    # for row in range(len(_trees)):
+    # average( h_i(x*)) - f(x*) ) ^2.
+
+
+# Random Forest
+def _run_rand_forest():
+    """Runs T iterations of random forest for each attribute subset size in [2, 4, 6]"""
+    global attr_subset_num, trees
+    for attr_subset_num in attr_subset_nums:
+        trees = []
+        print("FEATURE_SUBSET_SIZE: ", attr_subset_num, ": _______________________")
+        _run_bagged()
+
+
+# Predictions
+def _calculate_predictions(s, root, _predictions):
+    """
+    Calculates the predictions for the given tree root by using all examples to walk tree
+    and using _predict_example()
+    """
+    p = _predictions.copy()
+    for index in range(len(s[-1])):
+        example = []
+        for l in s:
+            example.append(l[index])
+        p[index] = ID3.predict_example(example, root, False)
+    return p
+
+
+def _calculate_bagged_predictions(data, root, _predictions):
+    """Uses the initial indexes of the sample data to calculate the overall prediction of all examples in s"""
+    round_predictions = np.zeros(len(data[-1]))
+    round_predictions = _calculate_predictions(data, root, round_predictions)
+    for i in range(len(data[-1])):
+        _predictions[i] += round_predictions[i]
+    return _predictions
+
+
+def _calculate_prediction_error(y, _predictions):
+    """Calculates the percentage of incorrect predictions"""
     count = 0
-    size = len(_true_lb)
-    for i in range(size):
-        if _true_lb[i] != _pred_lb[i]:
-            count += 1
-    return count/size 
-#===================================boosting================================           
-delta = 1e-8 # avoid zero training err resulintg infinite vote of a stump
-T = 2     # No. of iterations
-#--------------------------------------
-# _T: NO. of iterations
-# _delta : small item added to err to avoid infinite vote
-# return: [predicted result of each stump, vote of each stump]
-def ada_boost(_T, _delta, train_data):
-    pred_result = list_obj(_T)   # +1,-1 dict ele
-    vote_say = []
-    W_1 = np.ones(len(train_data))/len(train_data)   # wt initialization
-    train_data = wt_append(train_data, W_1)
-    weights = W_1
-    for i in range(_T):
-        tree = tree_build(train_data, 1)    # train stumps
-        [pp_true, qq_pred] = label_return(train_data, tree)   # prediction result 'yes or no'
-        pred_result[i].append(bin_quan(qq_pred))
-        err = wt_error(pp_true, qq_pred, weights) # + _delta
-        vote_say.append( 0.5*math.log((1-err)/err ))   #final vote of each stump
-        weights = wt_update(weights, 0.5*math.log((1-err)/err ), bin_quan(pp_true), bin_quan(qq_pred))
-        train_data = wt_update_2_data(train_data, weights) 
-        print(err)   # from the 2nd stump err is always clsoe to 0.5
-    return [pred_result, vote_say, weights]
-        
-[aa_pred, bb_vote, weights] = ada_boost(T, delta, mylist_train)
+    for i in range(len(y)):
+        if y[i] != _predictions[i]: count += 1
+    return count / len(y)
 
 
-fin_pred = fin_dec(aa_pred, bb_vote, len(mylist_train), T)
-true_label =bin_quan([row[-2] for row in myList_train])  
+if __name__ == '__main__':
+    ID3.data_type = "bank"
+    alg_type = sys.argv[1]
 
+    if alg_type == "ada":
+        ID3.max_depth = 2
+        predictions = np.zeros((T, m))
+    else:
+        predictions = np.zeros(4999)
+        m = 2500
 
-print(_error(true_label, fin_pred))
-    
-        
- 
-    
+    ID3.setup_data(m, T)
 
+    if alg_type == "ada":
+        print("ADA BOOST")
+        _run_ada_boost()
 
+    elif alg_type == "bag":
+        print("BAGGED DECISION TREES")
+        _run_bagged()
 
-
-
-
-
-
-
-
+    elif alg_type == "forest":
+        print("RANDOM FOREST")
+        _run_rand_forest()
